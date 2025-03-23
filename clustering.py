@@ -5,7 +5,6 @@ from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 import matplotlib.pyplot as plt
 import seaborn as sns
-from mpl_toolkits.mplot3d import Axes3D
 
 # Load dataset (assuming CSV format)
 file_path = "lung_cancer_dataset.csv"  # Ensure the file is in your working directory
