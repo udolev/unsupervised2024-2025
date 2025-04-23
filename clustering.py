@@ -1,96 +1,94 @@
+import numpy as np
 import pandas as pd
-from sklearn.manifold import TSNE
-from sklearn.cluster import KMeans, DBSCAN
+import prince
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
 from sklearn.mixture import GaussianMixture
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-import matplotlib.pyplot as plt
-import seaborn as sns
-from mpl_toolkits.mplot3d import Axes3D
+from sklearn.metrics import silhouette_score
 
-# Load dataset (assuming CSV format)
-file_path = "lung_cancer_dataset.csv"  # Ensure the file is in your working directory
-data = pd.read_csv(file_path)
+def kmeans_clustering(X, n_clusters, random_state=42):
+    """Apply KMeans clustering."""
+    kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
+    labels = kmeans.fit_predict(X)
+    return labels, kmeans.inertia_, kmeans
 
-# Separate features and target label (PULMONARY_DISEASE)
-X = data.drop(columns=['PULMONARY_DISEASE'])
-y = data['PULMONARY_DISEASE']
+def hierarchical_clustering(X, n_clusters):
+    """Apply Agglomerative Hierarchical clustering."""
+    hc = AgglomerativeClustering(n_clusters=n_clusters)
+    labels = hc.fit_predict(X)
+    return labels
 
-# Preprocessing: Select only numerical columns and drop missing values
-X_cleaned = X.select_dtypes(include=['float64', 'int64']).dropna()
+def dbscan_clustering(X, eps, min_samples):
+    """Apply DBSCAN clustering."""
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+    labels = dbscan.fit_predict(X)
+    n_noise = np.sum(labels == -1)
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    return labels, n_clusters, n_noise
 
-# Normalize the data
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X_cleaned)
+def gmm_clustering(X, n_components, random_state=42):
+    """Apply Gaussian Mixture Model clustering."""
+    gmm = GaussianMixture(n_components=n_components, random_state=random_state)
+    labels = gmm.fit_predict(X)
+    return labels
 
-# Encode the target column to numerical values (for visualization of true labels)
-label_encoder = LabelEncoder()
-y_encoded = label_encoder.fit_transform(y)
+def grid_search_kmeans(X, n_clusters_range, mca_dims):
+    """Perform grid search for KMeans with different clusters and MCA dimensions."""
+    results = []
+    
+    for n_components in mca_dims:
+        mca = prince.MCA(n_components=n_components)
+        df_mca = mca.fit_transform(X)
+        
+        for n_clusters in n_clusters_range:
+            labels, _, _ = kmeans_clustering(df_mca, n_clusters)
+            sil_score = silhouette_score(df_mca, labels)
+            results.append((n_components, n_clusters, sil_score))
+    
+    return pd.DataFrame(results, columns=['n_components', 'n_clusters', 'silhouette_score'])
 
-# Apply TSNE for 2D visualization
-tsne_2d = TSNE(n_components=2, random_state=42)
-X_tsne_2d = tsne_2d.fit_transform(X_scaled)
+# Similarly implement grid_search functions for other algorithms
+def grid_search_hierarchical(X, n_clusters_range, mca_dims):
+    """Perform grid search for Hierarchical clustering with different clusters and MCA dimensions."""
+    results = []
+    
+    for n_components in mca_dims:
+        mca = prince.MCA(n_components=n_components)
+        df_mca = mca.fit_transform(X)
+        
+        for n_clusters in n_clusters_range:
+            labels = hierarchical_clustering(df_mca, n_clusters)
+            sil_score = silhouette_score(df_mca, labels)
+            results.append((n_components, n_clusters, sil_score))
+    
+    return pd.DataFrame(results, columns=['n_components', 'n_clusters', 'silhouette_score'])
 
-# Apply TSNE for 3D visualization
-tsne_3d = TSNE(n_components=3, random_state=42)
-X_tsne_3d = tsne_3d.fit_transform(X_scaled)
+def grid_search_dbscan(X, eps_range, min_samples_range, mca_dims):
+    """Perform grid search for DBSCAN with different eps, min_samples and MCA dimensions."""
+    results = []
+    
+    for n_components in mca_dims:
+        mca = prince.MCA(n_components=n_components)
+        df_mca = mca.fit_transform(X)
+        
+        for eps in eps_range:
+            for min_samples in min_samples_range:
+                labels, n_clusters, n_noise = dbscan_clustering(df_mca, eps, min_samples)
+                sil_score = silhouette_score(df_mca, labels) if n_clusters > 1 else -1
+                results.append((n_components, eps, min_samples, n_clusters, n_noise, sil_score))
+    
+    return pd.DataFrame(results, columns=['n_components', 'eps', 'min_samples', 'n_clusters', 'n_noise', 'silhouette_score'])
 
-# Apply K-Means clustering (using 3 clusters as an example)
-kmeans = KMeans(n_clusters=3, random_state=42)
-kmeans_labels = kmeans.fit_predict(X_scaled)
-
-# Apply Gaussian Mixture Model clustering (using 3 components)
-gmm = GaussianMixture(n_components=3, random_state=42)
-gmm_labels = gmm.fit_predict(X_scaled)
-
-# Apply DBSCAN clustering
-dbscan = DBSCAN(eps=1.5, min_samples=10)
-dbscan_labels = dbscan.fit_predict(X_scaled)
-
-# Visualization helper function for 2D with saving option
-def plot_clusters_2d(data, labels, title, filename):
-    plt.figure(figsize=(10, 8))
-    sns.scatterplot(x=data[:, 0], y=data[:, 1], hue=labels, palette="viridis", s=10)
-    plt.title(title)
-    plt.xlabel('Dimension 1')
-    plt.ylabel('Dimension 2')
-    plt.legend(title="Cluster", loc='best', bbox_to_anchor=(1, 1))
-    plt.savefig(filename, bbox_inches='tight')  # Save the plot to a file
-    plt.show()
-
-# Visualization helper function for 3D with saving option
-def plot_clusters_3d(data, labels, title, filename):
-    fig = plt.figure(figsize=(12, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    scatter = ax.scatter(data[:, 0], data[:, 1], data[:, 2], c=labels, cmap='viridis', s=10)
-    ax.set_title(title)
-    ax.set_xlabel('Dimension 1')
-    ax.set_ylabel('Dimension 2')
-    ax.set_zlabel('Dimension 3')
-    legend = ax.legend(*scatter.legend_elements(), title="Cluster", loc='best', bbox_to_anchor=(1, 1))
-    ax.add_artist(legend)
-    plt.savefig(filename, bbox_inches='tight')  # Save the plot to a file
-    plt.show()
-
-# Visualize TSNE (2D) with true labels (encoded)
-plot_clusters_2d(X_tsne_2d, y_encoded, "t-SNE Visualization (2D) with True Labels", "tsne_2d_true_labels.png")
-
-# Visualize TSNE (2D) with K-Means clusters
-plot_clusters_2d(X_tsne_2d, kmeans_labels, "t-SNE Visualization (2D) with K-Means Clusters", "tsne_2d_kmeans.png")
-
-# Visualize TSNE (2D) with GMM clusters
-plot_clusters_2d(X_tsne_2d, gmm_labels, "t-SNE Visualization (2D) with GMM Clusters", "tsne_2d_gmm.png")
-
-# Visualize TSNE (2D) with DBSCAN clusters
-plot_clusters_2d(X_tsne_2d, dbscan_labels, "t-SNE Visualization (2D) with DBSCAN Clusters", "tsne_2d_dbscan.png")
-
-# Visualize TSNE (3D) with true labels (encoded)
-plot_clusters_3d(X_tsne_3d, y_encoded, "t-SNE Visualization (3D) with True Labels", "tsne_3d_true_labels.png")
-
-# Visualize TSNE (3D) with K-Means clusters
-plot_clusters_3d(X_tsne_3d, kmeans_labels, "t-SNE Visualization (3D) with K-Means Clusters", "tsne_3d_kmeans.png")
-
-# Visualize TSNE (3D) with GMM clusters
-plot_clusters_3d(X_tsne_3d, gmm_labels, "t-SNE Visualization (3D) with GMM Clusters", "tsne_3d_gmm.png")
-
-# Visualize TSNE (3D) with DBSCAN clusters
-plot_clusters_3d(X_tsne_3d, dbscan_labels, "t-SNE Visualization (3D) with DBSCAN Clusters", "tsne_3d_dbscan.png")
+def grid_search_gmm(X, n_components_range, mca_dims):
+    """Perform grid search for GMM with different components and MCA dimensions."""
+    results = []
+    
+    for n_components in mca_dims:
+        mca = prince.MCA(n_components=n_components)
+        df_mca = mca.fit_transform(X)
+        
+        for n_clusters in n_components_range:
+            labels = gmm_clustering(df_mca, n_clusters)
+            sil_score = silhouette_score(df_mca, labels)
+            results.append((n_components, n_clusters, sil_score))
+    
+    return pd.DataFrame(results, columns=['n_components', 'n_clusters', 'silhouette_score'])
