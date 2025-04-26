@@ -190,23 +190,68 @@ def main():
             else:  # GMM
                 labels = gmm_clustering(X_combined, int(best_algo_params['n_clusters']))
     
-    # 6. External Variable Association
-    print("Calculating mutual information with target...")
-    mi_score = calculate_mutual_info(labels, y)
-    print(f"Mutual information with target: {mi_score:.4f}")
-    
-    # For reference, also check mutual information for other algorithms
-    external_mi = {
-        'kmeans': calculate_mutual_info(kmeans_labels, y),
-        'hierarchical': calculate_mutual_info(hierarchical_labels, y),
-        'gmm': calculate_mutual_info(gmm_labels, y)
+    # 6. Mutual Information analysis on top variables
+    print("\nMutual Information analysis on external variables...")
+    # Define external variables list
+    external_vars = list(CATEGORICAL_COLS) + [TARGET_COL]
+    # Initialize storage
+    mi_scores = {var: defaultdict(list) for var in external_vars}
+    for r in range(NUM_CV_RUNS):
+        idx = np.random.choice(NUM_SAMPLES, SAMPLE_SIZE, replace=False)
+        Xc, Xn, y_sub = X_cat.iloc[idx], X_num_scaled.iloc[idx], y.iloc[idx]
+        # For each algorithm compute MI
+        for name, params in [('kmeans', best_kmeans), ('hierarchical', best_hierarchical),
+                             ('dbscan', best_dbscan), ('gmm', best_gmm)]:
+            mca = prince.MCA(n_components=int(params['n_components'])).fit_transform(Xc)
+            Xalg = combine_features(mca, Xn)
+            if name == 'dbscan':
+                labels, ncl, _ = dbscan_clustering(Xalg, params['eps'], int(params['min_samples']))
+                mask = labels != -1
+                if ncl <= 1: 
+                    continue
+                labels = labels[mask]
+                inds = y_sub.index[mask]
+            elif name == 'kmeans':
+                labels, _, _ = kmeans_clustering(Xalg, int(params['n_clusters']))
+                inds = y_sub.index
+            elif name == 'hierarchical':
+                labels = hierarchical_clustering(Xalg, int(params['n_clusters']))
+                inds = y_sub.index
+            else:
+                labels = gmm_clustering(Xalg, int(params['n_clusters']))
+                inds = y_sub.index
+            # compute MI for each var
+            for var in external_vars:
+                mi_scores[var][name].append(
+                    calculate_mutual_info(labels, 
+                        y_sub.loc[inds, var] if var != TARGET_COL else y_sub.values)
+                )
+    # Identify top 4 variables by max avg MI
+    avg_max = {
+        var: max(np.mean(mi_scores[var][algo]) for algo in mi_scores[var]) 
+        for var in external_vars
     }
-    if len(set(dbscan_labels)) > 1:
-        external_mi['dbscan'] = calculate_mutual_info(dbscan_labels, y)
-        
-    print("Mutual information with target for all algorithms:")
-    for algo, score in external_mi.items():
-        print(f"  {algo}: {score:.4f}")
+    top4 = sorted(avg_max, key=avg_max.get, reverse=True)[:4]
+    print("Top 4 informative variables:")
+    for i, var in enumerate(top4, 1):
+        print(f"{i}. {var}: {avg_max[var]:.4f}")
+    # For each, run ANOVA and t-test
+    for var in top4:
+        print(f"\nVariable: {var}")
+        scores = mi_scores[var]
+        f_mi, p_mi = compare_algorithms_anova(scores)
+        print(f"ANOVA MI: F={f_mi:.4f}, p={p_mi:.6f}")
+        if p_mi < 0.05:
+            means = {alg: np.mean(scores[alg]) for alg in scores}
+            a1, a2 = sorted(means, key=means.get, reverse=True)[:2]
+            t_mi, p_tmi = compare_best_algorithms_ttest(scores[a1], scores[a2])
+            print(f"Top algos for {var}: {a1} ({means[a1]:.4f}), {a2} ({means[a2]:.4f})")
+            print(f"Paired t-test MI ({a1} vs {a2}): t={t_mi:.4f}, p={p_tmi:.6f}")
+            # 👇 announce the best
+            print(f"➡️  Best algorithm for {var} by MI is {a1} (avg MI={means[a1]:.4f})")
+        else:
+            print("No significant MI differences; skipping t-test.")
+
     
     # 7. Anomaly Detection
     print("Performing anomaly detection...")
