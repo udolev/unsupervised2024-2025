@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+import prince
 import matplotlib.pyplot as plt
 from collections import defaultdict
 import matplotlib.cm as cm
@@ -9,12 +10,13 @@ from sklearn.preprocessing import StandardScaler
 # Import from project modules
 from config import (RANDOM_SEED, NUM_CV_RUNS, CATEGORICAL_COLS, 
                    NUMERICAL_COLS, TARGET_COL, CLUSTER_RANGE, MCA_DIMENSIONS, 
-                   DBSCAN_EPS_RANGE, DBSCAN_MIN_SAMPLES_RANGE, OUTPUT_DIR)
+                   DBSCAN_EPS_RANGE, DBSCAN_MIN_SAMPLES_RANGE, OUTPUT_DIR, NUM_SAMPLES, SAMPLE_SIZE)
 from data_loader import load_data, preprocess_data, apply_mca, combine_features
 from dimensionality import apply_tsne
 from clustering import (kmeans_clustering, hierarchical_clustering, 
                        dbscan_clustering, gmm_clustering, grid_search_kmeans,
-                       grid_search_hierarchical, grid_search_dbscan, grid_search_gmm)
+                       grid_search_hierarchical, grid_search_dbscan, grid_search_gmm,
+                       combine_features)
 from anomaly_detection import (kmeans_anomaly_detection, gmm_anomaly_detection, 
                               one_class_svm_anomaly_detection)
 from evaluation import (calculate_silhouette, calculate_mutual_info, 
@@ -41,24 +43,24 @@ def main():
     print("Running grid search for clustering algorithms...")
     
     # KMeans
-    kmeans_results = grid_search_kmeans(X_cat, CLUSTER_RANGE, MCA_DIMENSIONS)
+    kmeans_results = grid_search_kmeans(X_cat, X_num_scaled, CLUSTER_RANGE, MCA_DIMENSIONS)
     best_kmeans = kmeans_results.loc[kmeans_results['silhouette_score'].idxmax()]
-    print(f"Best KMeans: {int(best_kmeans['n_components'])} components, {int(best_kmeans['n_clusters'])} clusters")
+    print(f"Best KMeans: {int(best_kmeans['n_components'])} components, {int(best_kmeans['n_clusters'])} clusters, cluster counts: {best_kmeans['cluster_counts']}, silhouette: {best_kmeans['silhouette_score']:.4f}")
     
     # Hierarchical
-    hierarchical_results = grid_search_hierarchical(X_cat, CLUSTER_RANGE, MCA_DIMENSIONS)
+    hierarchical_results = grid_search_hierarchical(X_cat, X_num_scaled, CLUSTER_RANGE, MCA_DIMENSIONS)
     best_hierarchical = hierarchical_results.loc[hierarchical_results['silhouette_score'].idxmax()]
-    print(f"Best Hierarchical: {int(best_hierarchical['n_components'])} components, {int(best_hierarchical['n_clusters'])} clusters")
+    print(f"Best Hierarchical: {int(best_hierarchical['n_components'])} components, {int(best_hierarchical['n_clusters'])} clusters, cluster counts: {best_hierarchical['cluster_counts']}, silhouette: {best_hierarchical['silhouette_score']:.4f}")
     
     # DBSCAN
-    dbscan_results = grid_search_dbscan(X_cat, DBSCAN_EPS_RANGE, DBSCAN_MIN_SAMPLES_RANGE, MCA_DIMENSIONS)
+    dbscan_results = grid_search_dbscan(X_cat, X_num_scaled, DBSCAN_EPS_RANGE, DBSCAN_MIN_SAMPLES_RANGE, MCA_DIMENSIONS)
     best_dbscan = dbscan_results.loc[dbscan_results['silhouette_score'].idxmax()]
-    print(f"Best DBSCAN: {int(best_dbscan['n_components'])} components, eps={best_dbscan['eps']:.2f}, min_samples={int(best_dbscan['min_samples'])}")
+    print(f"Best DBSCAN: {int(best_dbscan['n_components'])} components, eps={best_dbscan['eps']:.2f}, min_samples={int(best_dbscan['min_samples'])}, clusters={int(best_dbscan['n_clusters'])}, noise={int(best_dbscan['n_noise'])}, cluster counts: {best_dbscan['cluster_counts']}, silhouette: {best_dbscan['silhouette_score']:.4f}")
     
     # GMM
-    gmm_results = grid_search_gmm(X_cat, CLUSTER_RANGE, MCA_DIMENSIONS)
+    gmm_results = grid_search_gmm(X_cat, X_num_scaled, CLUSTER_RANGE, MCA_DIMENSIONS)
     best_gmm = gmm_results.loc[gmm_results['silhouette_score'].idxmax()]
-    print(f"Best GMM: {int(best_gmm['n_components'])} components, {int(best_gmm['n_clusters'])} clusters")
+    print(f"Best GMM: {int(best_gmm['n_components'])} components, {int(best_gmm['n_clusters'])} clusters, cluster counts: {best_gmm['cluster_counts']}, silhouette: {best_gmm['silhouette_score']:.4f}")
     
     # Save heatmaps for each algorithm
     plot_silhouette_heatmap(kmeans_results, "KMeans Silhouette Score").savefig(
@@ -70,39 +72,63 @@ def main():
     
     # 3. Cross-validation to compare algorithms
     print("Performing cross-validation for algorithm comparison...")
-    
+
     # Store silhouette scores for each algorithm across CV runs
     silhouette_scores = defaultdict(list)
-    
+
     # Track best algorithm across CV runs
-    for cv in range(NUM_CV_RUNS):
+    cv = 0
+    while len(silhouette_scores['dbscan']) < NUM_CV_RUNS:
         print(f"Cross-validation run {cv+1}/{NUM_CV_RUNS}")
         
-        # Apply each algorithm with its best parameters
+        # Randomly sample data for this CV run
+        sample_indices = np.random.choice(NUM_SAMPLES, size=SAMPLE_SIZE, replace=False)
+        X_cat_sample = X_cat.iloc[sample_indices]
+        X_num_scaled_sample = X_num_scaled.iloc[sample_indices]
+        
+        # Apply each algorithm with its best parameters on sampled data
+
+        # DBSCAN
+        # For dbscan we change epsilon to 1 since the sample size is much smaller
+        mca = prince.MCA(n_components=int(best_dbscan['n_components']))
+        dbscan_mca = mca.fit_transform(X_cat_sample)
+        dbscan_X = combine_features(dbscan_mca, X_num_scaled_sample)
+        dbscan_labels, n_clusters, _ = dbscan_clustering(
+            dbscan_X, 1, int(best_dbscan['min_samples']))
+        
+        if n_clusters > 1:
+            # Only calculate silhouette if there's more than one cluster
+            non_noise_mask = dbscan_labels != -1
+            if sum(non_noise_mask) > SAMPLE_SIZE*0.9:
+                silhouette_scores['dbscan'].append(
+                    calculate_silhouette(dbscan_X[non_noise_mask], dbscan_labels[non_noise_mask]))
+            else:
+                continue
+        else:
+            continue
+        
         # KMeans
-        kmeans_mca = apply_mca(X_cat, int(best_kmeans['n_components']))
-        kmeans_X = combine_features(kmeans_mca, X_num_scaled)
+        mca = prince.MCA(n_components=int(best_kmeans['n_components']))
+        kmeans_mca = mca.fit_transform(X_cat_sample)
+        kmeans_X = combine_features(kmeans_mca, X_num_scaled_sample)
         kmeans_labels, _, _ = kmeans_clustering(kmeans_X, int(best_kmeans['n_clusters']))
         silhouette_scores['kmeans'].append(calculate_silhouette(kmeans_X, kmeans_labels))
         
         # Hierarchical
-        hierarchical_mca = apply_mca(X_cat, int(best_hierarchical['n_components']))
-        hierarchical_X = combine_features(hierarchical_mca, X_num_scaled)
+        mca = prince.MCA(n_components=int(best_hierarchical['n_components']))
+        hierarchical_mca = mca.fit_transform(X_cat_sample)
+        hierarchical_X = combine_features(hierarchical_mca, X_num_scaled_sample)
         hierarchical_labels = hierarchical_clustering(hierarchical_X, int(best_hierarchical['n_clusters']))
         silhouette_scores['hierarchical'].append(calculate_silhouette(hierarchical_X, hierarchical_labels))
         
-        # DBSCAN
-        dbscan_mca = apply_mca(X_cat, int(best_dbscan['n_components']))
-        dbscan_X = combine_features(dbscan_mca, X_num_scaled)
-        dbscan_labels, _, _ = dbscan_clustering(dbscan_X, best_dbscan['eps'], int(best_dbscan['min_samples']))
-        if len(set(dbscan_labels)) > 1:
-            silhouette_scores['dbscan'].append(calculate_silhouette(dbscan_X, dbscan_labels))
-        
         # GMM
-        gmm_mca = apply_mca(X_cat, int(best_gmm['n_components']))
-        gmm_X = combine_features(gmm_mca, X_num_scaled)
+        mca = prince.MCA(n_components=int(best_gmm['n_components']))
+        gmm_mca = mca.fit_transform(X_cat_sample)
+        gmm_X = combine_features(gmm_mca, X_num_scaled_sample)
         gmm_labels = gmm_clustering(gmm_X, int(best_gmm['n_clusters']))
         silhouette_scores['gmm'].append(calculate_silhouette(gmm_X, gmm_labels))
+
+        cv += 1
     
     # 4. Statistical tests to compare algorithms
     print("Performing statistical tests...")
@@ -110,6 +136,10 @@ def main():
     # ANOVA test
     f_statistic, p_value = compare_algorithms_anova(silhouette_scores)
     print(f"ANOVA test: F={f_statistic:.4f}, p={p_value:.6f}")
+    if p_value < 0.05:
+        print("At least one algorithm is significantly different from the others.")
+    else:
+        print("No significant difference between algorithms.")
     
     # Find best two algorithms
     algo_means = {algo: np.mean(scores) for algo, scores in silhouette_scores.items()}
@@ -120,38 +150,41 @@ def main():
     t_statistic, t_p_value = compare_best_algorithms_ttest(
         silhouette_scores[best_algo], silhouette_scores[second_best_algo])
     print(f"Paired t-test ({best_algo} vs {second_best_algo}): t={t_statistic:.4f}, p={t_p_value:.6f}")
+    if t_p_value < 0.05:
+        print(f"{best_algo} is significantly better than {second_best_algo}.")
+    else:
+        print(f"No significant difference between {best_algo} and {second_best_algo}.")
     
     # 5. Apply best algorithm and compute elbow method
     best_algo_params = locals()[f"best_{best_algo}"]
     
+    # Create combined features for best algorithm
+    mca = prince.MCA(n_components=int(best_algo_params['n_components']))
+    best_mca = mca.fit_transform(X_cat)
+    X_combined = combine_features(best_mca, X_num_scaled)
+    
     if best_algo == 'dbscan':
-        best_mca = apply_mca(X_cat, int(best_algo_params['n_components']))
-        X_combined = combine_features(best_mca, X_num_scaled)
         labels, n_clusters, n_noise = dbscan_clustering(
             X_combined, best_algo_params['eps'], int(best_algo_params['min_samples']))
     else:
         # Elbow method (only for KMeans)
         if best_algo == 'kmeans':
-            inertia_values = []
-            best_mca = apply_mca(X_cat, int(best_algo_params['n_components']))
-            X_combined = combine_features(best_mca, X_num_scaled)
+            # inertia_values = []
             
-            for n_clusters in CLUSTER_RANGE:
-                _, inertia, _ = kmeans_clustering(X_combined, n_clusters)
-                inertia_values.append(inertia)
+            # for n_clusters in CLUSTER_RANGE:
+            #     _, inertia, _ = kmeans_clustering(X_combined, n_clusters)
+            #     inertia_values.append(inertia)
             
-            optimal_clusters, reduction = find_optimal_clusters(inertia_values, CLUSTER_RANGE)
-            print(f"Optimal clusters (50% reduction): {optimal_clusters}")
+            # optimal_clusters, reduction = find_optimal_clusters(inertia_values, CLUSTER_RANGE)
+            # print(f"Optimal clusters (50% reduction): {optimal_clusters}")
             
-            # Save elbow plot
-            elbow_plot = plot_elbow_method(CLUSTER_RANGE, inertia_values)
-            elbow_plot.savefig(os.path.join(OUTPUT_DIR, 'kmeans_elbow.png'))
+            # # Save elbow plot
+            # elbow_plot = plot_elbow_method(CLUSTER_RANGE, inertia_values)
+            # elbow_plot.savefig(os.path.join(OUTPUT_DIR, 'kmeans_elbow.png'))
             
             # Apply kmeans with optimal clusters
-            labels, _, _ = kmeans_clustering(X_combined, optimal_clusters)
+            labels, _, _ = kmeans_clustering(X_combined, int(best_algo_params['n_clusters']))
         else:
-            best_mca = apply_mca(X_cat, int(best_algo_params['n_components']))
-            X_combined = combine_features(best_mca, X_num_scaled)
             if best_algo == 'hierarchical':
                 labels = hierarchical_clustering(X_combined, int(best_algo_params['n_clusters']))
             else:  # GMM

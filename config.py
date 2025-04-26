@@ -5,8 +5,9 @@ RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
 # Data settings
-NUM_SAMPLES = 5000  # Match actual dataset size
-NUM_CV_RUNS = 10    # Number of cross-validation runs
+NUM_SAMPLES = 5000
+NUM_CV_RUNS = 50    # Number of cross-validation runs
+SAMPLE_SIZE = 1000
 
 # Categorical and numerical column definitions
 CATEGORICAL_COLS = [
@@ -21,7 +22,7 @@ TARGET_COL = 'PULMONARY_DISEASE'
 
 # Clustering parameters
 CLUSTER_RANGE = range(2, 15)
-MCA_DIMENSIONS = [1, 2, 3, 5, 8]  # More appropriate range
+MCA_DIMENSIONS = [1, 2, 3, 5, 8]
 
 # DBSCAN parameters
 DBSCAN_EPS_RANGE = np.linspace(0.3, 0.8, 6)

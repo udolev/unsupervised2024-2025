@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 from sklearn.metrics import silhouette_score, mutual_info_score
 from scipy import stats
 
