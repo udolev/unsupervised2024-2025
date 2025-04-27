@@ -190,97 +190,133 @@ def main():
             else:  # GMM
                 labels = gmm_clustering(X_combined, int(best_algo_params['n_clusters']))
     
-    # 6. Mutual Information analysis on top variables
+    # 6. Mutual Information analysis on external variables
     print("\nMutual Information analysis on external variables...")
     # Define external variables list
     external_vars = list(CATEGORICAL_COLS) + [TARGET_COL]
     # Initialize storage
     mi_scores = {var: defaultdict(list) for var in external_vars}
-    for r in range(NUM_CV_RUNS):
+
+    # Use while loop instead of for loop to ensure we get enough valid runs
+    cv_run = 0
+    while min([len(mi_scores[var][algo]) for var in external_vars for algo in ['kmeans', 'hierarchical', 'dbscan', 'gmm']], default=0) < NUM_CV_RUNS and cv_run < NUM_CV_RUNS * 3:
+        cv_run += 1
+        print(f"MI Cross-validation run {cv_run}/{NUM_CV_RUNS*3}")
+        
+        # Sample data for this run
         idx = np.random.choice(NUM_SAMPLES, SAMPLE_SIZE, replace=False)
-        Xc, Xn, y_sub = X_cat.iloc[idx], X_num_scaled.iloc[idx], y.iloc[idx]
+        Xc, Xn = X_cat.iloc[idx], X_num_scaled.iloc[idx]
+        
+        # Get the full sample for external variables
+        full_sample = df.iloc[idx]
+        
         # For each algorithm compute MI
         for name, params in [('kmeans', best_kmeans), ('hierarchical', best_hierarchical),
-                             ('dbscan', best_dbscan), ('gmm', best_gmm)]:
+                            ('dbscan', best_dbscan), ('gmm', best_gmm)]:
+            # Apply MCA transformation
             mca = prince.MCA(n_components=int(params['n_components'])).fit_transform(Xc)
             Xalg = combine_features(mca, Xn)
+            
+            # Get cluster labels based on algorithm
             if name == 'dbscan':
-                labels, ncl, _ = dbscan_clustering(Xalg, params['eps'], int(params['min_samples']))
-                mask = labels != -1
-                if ncl <= 1: 
+                labels, ncl, _ = dbscan_clustering(Xalg, float(params['eps']), int(params['min_samples']))
+                
+                # Check for sufficient non-noise points and multiple clusters
+                non_noise_mask = labels != -1
+                non_noise_percentage = np.sum(non_noise_mask) / len(non_noise_mask)
+                
+                if non_noise_percentage < 0.9 or ncl <= 1:
+                    print(f"  Skipping {name} (noise: {(1-non_noise_percentage)*100:.1f}%, clusters: {ncl})")
                     continue
-                labels = labels[mask]
-                inds = y_sub.index[mask]
-            elif name == 'kmeans':
-                labels, _, _ = kmeans_clustering(Xalg, int(params['n_clusters']))
-                inds = y_sub.index
-            elif name == 'hierarchical':
-                labels = hierarchical_clustering(Xalg, int(params['n_clusters']))
-                inds = y_sub.index
+                    
+                # Filter to only non-noise points
+                labels = labels[non_noise_mask]
+                filtered_sample = full_sample.iloc[np.where(non_noise_mask)[0]]
             else:
-                labels = gmm_clustering(Xalg, int(params['n_clusters']))
-                inds = y_sub.index
-            # compute MI for each var
+                # For other algorithms, use all points
+                if name == 'kmeans':
+                    labels, _, _ = kmeans_clustering(Xalg, int(params['n_clusters']))
+                elif name == 'hierarchical':
+                    labels = hierarchical_clustering(Xalg, int(params['n_clusters']))
+                else:  # gmm
+                    labels = gmm_clustering(Xalg, int(params['n_clusters']))
+                
+                filtered_sample = full_sample
+            
+            # Compute MI for each external variable
             for var in external_vars:
-                mi_scores[var][name].append(
-                    calculate_mutual_info(labels, 
-                        y_sub.loc[inds, var] if var != TARGET_COL else y_sub.values)
-                )
+                # Calculate MI between cluster labels and the external variable
+                mi = calculate_mutual_info(labels, filtered_sample[var].values)
+                mi_scores[var][name].append(mi)
+            
+            print(f"  Added run for {name} (now at {len(mi_scores[external_vars[0]][name])}/{NUM_CV_RUNS})")
+
     # Identify top 4 variables by max avg MI
     avg_max = {
-        var: max(np.mean(mi_scores[var][algo]) for algo in mi_scores[var]) 
+        var: max(np.mean(mi_scores[var][algo]) for algo in ['kmeans', 'hierarchical', 'dbscan', 'gmm'] 
+                if len(mi_scores[var][algo]) > 0)
         for var in external_vars
     }
-    top4 = sorted(avg_max, key=avg_max.get, reverse=True)[:4]
+    top4 = sorted(avg_max.keys(), key=lambda x: avg_max[x], reverse=True)[:4]
+
     print("Top 4 informative variables:")
     for i, var in enumerate(top4, 1):
         print(f"{i}. {var}: {avg_max[var]:.4f}")
-    # For each, run ANOVA and t-test
+
+    # For each variable, run ANOVA and t-test
     for var in top4:
         print(f"\nVariable: {var}")
-        scores = mi_scores[var]
+        # Get scores for algorithms with data
+        scores = {algo: vals for algo, vals in mi_scores[var].items() if len(vals) > 0}
+        
+        # Run ANOVA test
         f_mi, p_mi = compare_algorithms_anova(scores)
         print(f"ANOVA MI: F={f_mi:.4f}, p={p_mi:.6f}")
+        
         if p_mi < 0.05:
+            # Find top 2 algorithms
             means = {alg: np.mean(scores[alg]) for alg in scores}
-            a1, a2 = sorted(means, key=means.get, reverse=True)[:2]
+            top_algos = sorted(means.keys(), key=lambda x: means[x], reverse=True)[:2]
+            a1, a2 = top_algos[0], top_algos[1]
+            
+            # Run t-test between top 2
             t_mi, p_tmi = compare_best_algorithms_ttest(scores[a1], scores[a2])
             print(f"Top algos for {var}: {a1} ({means[a1]:.4f}), {a2} ({means[a2]:.4f})")
             print(f"Paired t-test MI ({a1} vs {a2}): t={t_mi:.4f}, p={p_tmi:.6f}")
-            # 👇 announce the best
+            
+            # Announce the best
             print(f"➡️  Best algorithm for {var} by MI is {a1} (avg MI={means[a1]:.4f})")
         else:
             print("No significant MI differences; skipping t-test.")
-          # Suppose `top4` is your list of 4 variables,
-# and `mi_scores[var][alg]` is the list of MI scores we built.
 
+    # Visualization
     algos = ['kmeans', 'hierarchical', 'dbscan', 'gmm']
-    # Compute the mean MI for each (var, alg)
-    mean_mi = {
-        var: {alg: np.mean(mi_scores[var][alg]) for alg in algos}
-        for var in top4
-    }
-    
-    # Prepare data for plotting
-    vars = top4
-    x = np.arange(len(vars))
-    width = 0.2
-    
-    fig, ax = plt.subplots()
-    for i, alg in enumerate(algos):
-        vals = [mean_mi[var][alg] for var in vars]
-        ax.bar(x + i*width, vals, width, label=alg)
-    
-    # Formatting
-    ax.set_xticks(x + width*(len(algos)-1)/2)
-    ax.set_xticklabels(vars)
-    ax.set_ylabel('Average Mutual Information')
-    ax.set_xlabel('External Variable')
-    ax.set_title('Comparison of Algorithms by MI on Top 4 Variables')
-    ax.legend(title='Algorithm')
-    plt.tight_layout()
-    plt.show()
 
+    # Compute mean MI for each (var, alg) combination
+    mean_mi = {var: {} for var in top4}
+    for var in top4:
+        for alg in algos:
+            scores = mi_scores[var][alg]
+            mean_mi[var][alg] = np.mean(scores) if scores else 0
+
+    # Prepare plot
+    plt.figure(figsize=(12, 6))
+    x = np.arange(len(top4))
+    width = 0.2
+
+    # Create grouped bars
+    for i, alg in enumerate(algos):
+        values = [mean_mi[var][alg] for var in top4]
+        plt.bar(x + (i - 1.5) * width, values, width, label=alg)
+
+    # Add labels and formatting
+    plt.xlabel('External Variable')
+    plt.ylabel('Average Mutual Information')
+    plt.title('Comparison of Algorithms by MI on Top 4 Variables')
+    plt.xticks(x, top4, rotation=45, ha='right')
+    plt.legend(title='Algorithm')
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUTPUT_DIR, 'mi_comparison_top4.png')) 
     
     # 7. Anomaly Detection
     print("Performing anomaly detection...")
@@ -316,7 +352,7 @@ def main():
     # 8. Create t-SNE visualization
     print("Creating visualizations...")
     X_tsne = apply_tsne(X_combined)
-    
+
     # Save cluster visualization
     tsne_plot = visualize_tsne_clusters(X_tsne, labels, f"Best Algorithm ({best_algo}) Clusters")
     tsne_plot.savefig(os.path.join(OUTPUT_DIR, f'{best_algo}_clusters.png'))
