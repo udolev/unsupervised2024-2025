@@ -45,7 +45,7 @@ def main():
     # KMeans
     kmeans_results = grid_search_kmeans(X_cat, X_num_scaled, CLUSTER_RANGE, MCA_DIMENSIONS)
     best_kmeans = kmeans_results.loc[kmeans_results['silhouette_score'].idxmax()]
-    print(f"Best KMeans: {int(best_kmeans['n_components'])} components, {int(best_kmeans['n_clusters'])} clusters, cluster counts: {best_kmeans['cluster_counts']}, silhouette: {best_kmeans['silhouette_score']:.4f}")
+    print(f"Best KMeans: {int(best_kmeans['n_components'])} components, {int(best_kmeans['n_clusters'])} clusters, cluster counts: {best_kmeans['cluster_counts']}, silhouette: {best_kmeans['silhouette_score']:.4f}")    
     
     # Hierarchical
     hierarchical_results = grid_search_hierarchical(X_cat, X_num_scaled, CLUSTER_RANGE, MCA_DIMENSIONS)
@@ -78,9 +78,7 @@ def main():
 
     # Track best algorithm across CV runs
     cv = 0
-    while len(silhouette_scores['dbscan']) < NUM_CV_RUNS:
-        print(f"Cross-validation run {cv+1}/{NUM_CV_RUNS}")
-        
+    while len(silhouette_scores['dbscan']) < NUM_CV_RUNS:        
         # Randomly sample data for this CV run
         sample_indices = np.random.choice(NUM_SAMPLES, size=SAMPLE_SIZE, replace=False)
         X_cat_sample = X_cat.iloc[sample_indices]
@@ -135,7 +133,7 @@ def main():
     
     # ANOVA test
     f_statistic, p_value = compare_algorithms_anova(silhouette_scores)
-    print(f"ANOVA test: F={f_statistic:.4f}, p={p_value:.6f}")
+    print(f"ANOVA test: F={f_statistic}, p={p_value}")
     if p_value < 0.05:
         print("At least one algorithm is significantly different from the others.")
     else:
@@ -149,7 +147,7 @@ def main():
     # Paired t-test between best two algorithms
     t_statistic, t_p_value = compare_best_algorithms_ttest(
         silhouette_scores[best_algo], silhouette_scores[second_best_algo])
-    print(f"Paired t-test ({best_algo} vs {second_best_algo}): t={t_statistic:.4f}, p={t_p_value:.6f}")
+    print(f"Paired t-test ({best_algo} vs {second_best_algo}): t={t_statistic}, p={t_p_value}")
     if t_p_value < 0.05:
         print(f"{best_algo} is significantly better than {second_best_algo}.")
     else:
@@ -169,18 +167,18 @@ def main():
     else:
         # Elbow method (only for KMeans)
         if best_algo == 'kmeans':
-            # inertia_values = []
+            inertia_values = []
             
-            # for n_clusters in CLUSTER_RANGE:
-            #     _, inertia, _ = kmeans_clustering(X_combined, n_clusters)
-            #     inertia_values.append(inertia)
+            for n_clusters in CLUSTER_RANGE:
+                _, inertia, _ = kmeans_clustering(X_combined, n_clusters)
+                inertia_values.append(inertia)
             
-            # optimal_clusters, reduction = find_optimal_clusters(inertia_values, CLUSTER_RANGE)
-            # print(f"Optimal clusters (50% reduction): {optimal_clusters}")
+            optimal_clusters, reduction = find_optimal_clusters(inertia_values, CLUSTER_RANGE)
+            print(f"Optimal clusters (50% reduction): {optimal_clusters}")
             
-            # # Save elbow plot
-            # elbow_plot = plot_elbow_method(CLUSTER_RANGE, inertia_values)
-            # elbow_plot.savefig(os.path.join(OUTPUT_DIR, 'kmeans_elbow.png'))
+            # Save elbow plot
+            elbow_plot = plot_elbow_method(CLUSTER_RANGE, inertia_values)
+            elbow_plot.savefig(os.path.join(OUTPUT_DIR, 'kmeans_elbow.png'))
             
             # Apply kmeans with optimal clusters
             labels, _, _ = kmeans_clustering(X_combined, int(best_algo_params['n_clusters']))
@@ -199,10 +197,9 @@ def main():
 
     # Use while loop instead of for loop to ensure we get enough valid runs
     cv_run = 0
-    while min([len(mi_scores[var][algo]) for var in external_vars for algo in ['kmeans', 'hierarchical', 'dbscan', 'gmm']], default=0) < NUM_CV_RUNS and cv_run < NUM_CV_RUNS * 3:
+    while min([len(mi_scores[var][algo]) for var in external_vars for algo in ['kmeans', 'hierarchical', 'dbscan', 'gmm']], default=0) < NUM_CV_RUNS:
         cv_run += 1
-        print(f"MI Cross-validation run {cv_run}/{NUM_CV_RUNS*3}")
-        
+
         # Sample data for this run
         idx = np.random.choice(NUM_SAMPLES, SAMPLE_SIZE, replace=False)
         Xc, Xn = X_cat.iloc[idx], X_num_scaled.iloc[idx]
@@ -219,14 +216,13 @@ def main():
             
             # Get cluster labels based on algorithm
             if name == 'dbscan':
-                labels, ncl, _ = dbscan_clustering(Xalg, float(params['eps']), int(params['min_samples']))
+                labels, ncl, _ = dbscan_clustering(Xalg, 1, int(params['min_samples']))
                 
                 # Check for sufficient non-noise points and multiple clusters
                 non_noise_mask = labels != -1
                 non_noise_percentage = np.sum(non_noise_mask) / len(non_noise_mask)
                 
                 if non_noise_percentage < 0.9 or ncl <= 1:
-                    print(f"  Skipping {name} (noise: {(1-non_noise_percentage)*100:.1f}%, clusters: {ncl})")
                     continue
                     
                 # Filter to only non-noise points
@@ -249,7 +245,10 @@ def main():
                 mi = calculate_mutual_info(labels, filtered_sample[var].values)
                 mi_scores[var][name].append(mi)
             
-            print(f"  Added run for {name} (now at {len(mi_scores[external_vars[0]][name])}/{NUM_CV_RUNS})")
+    # Ensure we only keep the first NUM_CV_RUNS for each variable and algorithm
+    for var in external_vars:
+        for algo in ['kmeans', 'hierarchical', 'dbscan', 'gmm']:
+            mi_scores[var][algo] = mi_scores[var][algo][:NUM_CV_RUNS]
 
     # Identify top 4 variables by max avg MI
     avg_max = {
@@ -271,7 +270,7 @@ def main():
         
         # Run ANOVA test
         f_mi, p_mi = compare_algorithms_anova(scores)
-        print(f"ANOVA MI: F={f_mi:.4f}, p={p_mi:.6f}")
+        print(f"ANOVA MI: F={f_mi}, p={p_mi}")
         
         if p_mi < 0.05:
             # Find top 2 algorithms
@@ -281,11 +280,11 @@ def main():
             
             # Run t-test between top 2
             t_mi, p_tmi = compare_best_algorithms_ttest(scores[a1], scores[a2])
-            print(f"Top algos for {var}: {a1} ({means[a1]:.4f}), {a2} ({means[a2]:.4f})")
-            print(f"Paired t-test MI ({a1} vs {a2}): t={t_mi:.4f}, p={p_tmi:.6f}")
+            print(f"Top algos for {var}: {a1} ({means[a1]:.4f}), {a2} ({means[a2]:.4f})") # Keep MI means rounded for readability
+            print(f"Paired t-test MI ({a1} vs {a2}): t={t_mi}, p={p_tmi}")
             
             # Announce the best
-            print(f"➡️  Best algorithm for {var} by MI is {a1} (avg MI={means[a1]:.4f})")
+            print(f"➡️  Best algorithm for {var} by MI is {a1} (avg MI={means[a1]:.4f})") # Keep MI means rounded for readability
         else:
             print("No significant MI differences; skipping t-test.")
 
@@ -349,19 +348,8 @@ def main():
     for algo, score in anomaly_mi.items():
         print(f"  {algo}: {score:.4f}")
     
-    # 8. Create t-SNE visualization
-    print("Creating visualizations...")
-    X_tsne = apply_tsne(X_combined)
-
-    # Save cluster visualization
-    tsne_plot = visualize_tsne_clusters(X_tsne, labels, f"Best Algorithm ({best_algo}) Clusters")
-    tsne_plot.savefig(os.path.join(OUTPUT_DIR, f'{best_algo}_clusters.png'))
     
-    # Save true vs predicted visualization
-    comparison_plot = plot_true_vs_predicted(X_tsne, y, labels)
-    comparison_plot.savefig(os.path.join(OUTPUT_DIR, 'true_vs_predicted.png'))
-    
-    # 9. Dive deeper into clusters to understand medical implications
+    # 8. Dive deeper into clusters to understand medical implications
     print("\nAnalyzing cluster characteristics...")
     
     # Get the best clustering results
@@ -473,7 +461,7 @@ def main():
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, 'cluster_profiles_radar.png'))
     
-    # 10. Analyze anomalies in relation to clusters and disease
+    # 9. Analyze anomalies in relation to clusters and disease
     anomaly_analysis = pd.DataFrame({
         'kmeans_anomaly': kmeans_anomalies,
         'gmm_anomaly': gmm_anomalies,
