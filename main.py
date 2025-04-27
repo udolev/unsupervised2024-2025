@@ -22,9 +22,7 @@ from anomaly_detection import (kmeans_anomaly_detection, gmm_anomaly_detection,
 from evaluation import (calculate_silhouette, calculate_mutual_info, 
                        compare_algorithms_anova, compare_best_algorithms_ttest,
                        find_optimal_clusters)
-from visualization import (plot_silhouette_heatmap, plot_elbow_method,
-                         visualize_tsne_clusters, plot_true_vs_predicted,
-                         plot_anomaly_scores)
+from visualization import (plot_silhouette_heatmap, plot_elbow_method, plot_anomaly_scores)
 
 # Set random seed
 np.random.seed(RANDOM_SEED)
@@ -381,7 +379,7 @@ def main():
             categorical_modes[col] = (mode_value, mode_pct)
         
         # Calculate pulmonary disease percentage
-        disease_pct = (cluster_data[TARGET_COL] == 'YES').mean() * 100
+        disease_pct = (cluster_data[TARGET_COL] == 1).mean() * 100
         
         cluster_stats.append({
             'cluster_id': cluster_id,
