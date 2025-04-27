@@ -251,6 +251,35 @@ def main():
             print(f"➡️  Best algorithm for {var} by MI is {a1} (avg MI={means[a1]:.4f})")
         else:
             print("No significant MI differences; skipping t-test.")
+          # Suppose `top4` is your list of 4 variables,
+# and `mi_scores[var][alg]` is the list of MI scores we built.
+
+    algos = ['kmeans', 'hierarchical', 'dbscan', 'gmm']
+    # Compute the mean MI for each (var, alg)
+    mean_mi = {
+        var: {alg: np.mean(mi_scores[var][alg]) for alg in algos}
+        for var in top4
+    }
+    
+    # Prepare data for plotting
+    vars = top4
+    x = np.arange(len(vars))
+    width = 0.2
+    
+    fig, ax = plt.subplots()
+    for i, alg in enumerate(algos):
+        vals = [mean_mi[var][alg] for var in vars]
+        ax.bar(x + i*width, vals, width, label=alg)
+    
+    # Formatting
+    ax.set_xticks(x + width*(len(algos)-1)/2)
+    ax.set_xticklabels(vars)
+    ax.set_ylabel('Average Mutual Information')
+    ax.set_xlabel('External Variable')
+    ax.set_title('Comparison of Algorithms by MI on Top 4 Variables')
+    ax.legend(title='Algorithm')
+    plt.tight_layout()
+    plt.show()
 
     
     # 7. Anomaly Detection
